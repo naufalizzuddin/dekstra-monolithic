@@ -1,0 +1,19 @@
+services:
+  migrate:
+    environment: &loadtest_environment
+      DJANGO_LOAD_TEST_MODE: "true"
+      DJANGO_LOAD_TEST_OTP: ${DJANGO_LOAD_TEST_OTP:-246810}
+      EMAIL_BACKEND: django.core.mail.backends.locmem.EmailBackend
+      THROTTLE_LOGIN_RATE: 100000/min
+      THROTTLE_OTP_RATE: 100000/min
+      THROTTLE_PASSWORD_RESET_RATE: 100000/min
+      THROTTLE_REGISTER_RATE: 100000/min
+
+  web:
+    environment: *loadtest_environment
+
+  worker:
+    environment: *loadtest_environment
+
+  beat:
+    environment: *loadtest_environment

@@ -1,0 +1,118 @@
+name: dekstra
+
+x-app: &app
+  build:
+    context: .
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-before-production}
+    DJANGO_DEBUG: ${DJANGO_DEBUG:-true}
+    DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,web}
+    POSTGRES_DB: ${POSTGRES_DB:-dekstra_db}
+    POSTGRES_USER: ${POSTGRES_USER:-dekstra}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dekstra}
+    POSTGRES_HOST: db
+    POSTGRES_PORT: 5432
+    CELERY_BROKER_URL: redis://redis:6379/0
+    CELERY_RESULT_BACKEND: django-db
+    EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
+    EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
+  volumes:
+    - media_data:/app/media
+    - static_data:/app/staticfiles
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-dekstra_db}
+      POSTGRES_USER: ${POSTGRES_USER:-dekstra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dekstra}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dekstra} -d ${POSTGRES_DB:-dekstra_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  migrate:
+    <<: *app
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py collectstatic --noinput"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    <<: *app
+    command:
+      - gunicorn
+      - dekstra.wsgi:application
+      - --bind
+      - 0.0.0.0:8000
+      - --workers
+      - "8"
+      - --timeout
+      - "120"
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  worker:
+    <<: *app
+    command: ["celery", "-A", "dekstra", "worker", "--loglevel=info", "--concurrency=2"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  beat:
+    <<: *app
+    command: ["celery", "-A", "dekstra", "beat", "--loglevel=info", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  media_data:
+  static_data:
